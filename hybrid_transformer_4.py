@@ -327,7 +327,7 @@ class DGAHybridModel(nn.Module):
         super(DGAHybridModel, self).__init__()
         self.model1 = bigram_model
         self.model2 = char_model
-        self.concat_layer = nn.Linear(46*1405*128+47*38*128, num_classes) # 8500992
+        self.concat_layer = nn.Linear(((46*1405-1)//2)*128+47*38*128, num_classes) # 8500992
 
     def forward(self, bigram_in, char_in):
         out1 = self.model1(bigram_in)
@@ -373,8 +373,8 @@ for epoch in range(num_epochs):
         ##print(f'input bigrams: {input_bigrams.shape}')
         input_bigrams = input_bigrams.view(-1, 46 * 1405)
 
-        # 100, 47, 38 => char input shape
-        # 100, 1786 => reshape
+        # 10, 47, 38 => char input shape
+        # 10, 1786 => reshape
         ##print(f'input chars: {input_chars.shape}')
         input_chars = input_chars.view(-1, 47 * 38)
 
