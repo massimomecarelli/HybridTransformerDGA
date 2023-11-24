@@ -168,13 +168,14 @@ test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuf
 
 # Define the positional encoding function
 def positional_encoding(max_seq_len, d_model):
-    position = torch.arange(0, max_seq_len).unsqueeze(1)
-    div_term = torch.exp(torch.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
+    position = torch.arange(0, max_seq_len).unsqueeze(1) # (seq_len, 1)
+    div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model)) # denominator
+    # Create a Matrix of shape (1, seq_len, d_model)
     pos_enc = torch.zeros(1, max_seq_len, d_model)
-    pos_enc[0, :, 0::2] = torch.sin(position * div_term)
-    pos_enc[0, :, 1::2] = torch.cos(position * div_term)
+    pos_enc[0, :, 0::2] = torch.sin(position * div_term) # even
+    pos_enc[0, :, 1::2] = torch.cos(position * div_term) # odd
     print('pos enc: ', pos_enc.shape)
-    return pos_enc
+    return pos_enc # (1, seq_len, d_model)
 
 
 # Models hyperparameters
@@ -202,7 +203,7 @@ class BigramEmbeddingModel(nn.Module):
         self.num_kernels = num_kernels
         self.conv_kernel_size = conv_kernel_size # 3
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.pos_encoder = positional_encoding(max_seq_len=(vocab_size*longest_word), d_model=embedding_dim)
+        self.pos_encoder = positional_encoding(max_seq_len=(vocab_size*longest_word), d_model=embedding_dim).requires_grad_(False)
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=self.num_kernels, kernel_size=self.conv_kernel_size, bias=True)
         self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # window vector length = conv kernel length
         self.feedforward = nn.Sequential(
@@ -307,7 +308,7 @@ class RepeatedTransformerEncoder(nn.Module):
                  num_kernels_chars=256):
         super(RepeatedTransformerEncoder, self).__init__()
         self.embedding = nn.Embedding(vocab_size_chars, d_model)
-        self.pos_encoder = positional_encoding(max_seq_len=1786, d_model=128)
+        self.pos_encoder = positional_encoding(max_seq_len=1786, d_model=128).requires_grad_(False)
         self.layers = nn.ModuleList([
             ModifiedEncoderBlock(vocab_size_chars, d_model, hidden_dim, num_heads,
                                  conv_kernel_size=conv_kernel_size, num_kernels=num_kernels_chars,
