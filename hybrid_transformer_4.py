@@ -1,6 +1,4 @@
-import nltk
 import os
-from nltk.util import bigrams
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
@@ -150,7 +148,7 @@ for d in range(len(datasets)):  # loops the datasets
 # Use PyTorch's ConcatDataset to concatenate the individual datasets into a single dataset
 dataset_tot = ConcatDataset(datasets)
 #with open("final_dataset_one_hot.txt", "w") as text_file:
-print(f"A Dataset Domain:\n Bigram one hot:\n{dataset_tot[2][0]}\nChar one hot:\n{dataset_tot[2][1]}\nLabel:\n{dataset_tot[2][2]}")
+print(f"A Dataset Domain:\n Bigram one hot:\n{dataset_tot[2][0]}\n Char one hot:\n{dataset_tot[2][1]}\nLabel:\n{dataset_tot[2][2]}")
 print(f'dataset len: {len(dataset_tot)}')  # 50898
 
 del datasets
@@ -159,7 +157,7 @@ for n in range(len(dataset_tot)):
     dataset_tot[n][1] = torch.tensor(np.array(dataset_tot[n][1]), dtype=torch.long)
     dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
 
-batch_size = 10
+batch_size = 2
 train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%
 # Create data loaders for dataset; shuffle for training
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
@@ -243,12 +241,11 @@ class ModifiedEncoderBlock(nn.Module):
 
         # Define the multi-head self-attention layer
         # embedding_dim=128 , heads=8 => d_k=d_v=16
-        #self.attention = MultiHeadAttention(embedding_dim, num_heads)  # output = (30,1786,128)
         self.attention = nn.MultiheadAttention(embedding_dim, num_heads)
 
         # cnn
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=256,
-                                kernel_size=conv_kernel_size, padding=1, bias=True)  # padded input size per channel = 130
+                                kernel_size=conv_kernel_size, padding=1, bias=True)
         # kernel_size=3, stride=1, padding=1 => same convolution (the output keeps the same dimension)
         # input cnn = output attention = domain name sequence len
         self.pool = nn.MaxPool1d(
@@ -333,11 +330,11 @@ class DGAHybridModel(nn.Module):
     def forward(self, bigram_in, char_in):
         out1 = self.model1(bigram_in)
         out2 = self.model2(char_in)
-        print(f"\nBigram out: {out1.shape}\nChar out: {out2.shape}")
+        ##print(f"\nBigram out: {out1.shape}\nChar out: {out2.shape}")
         # Concatenate the outputs
         concatenated_output = torch.cat((out1.view(-1, out1.shape[1]*out1.shape[2]),
                                          out2.view(-1, out2.shape[1]*out2.shape[2])), dim=1)
-        print('\nconcatenated dim: ', concatenated_output.shape)
+        ##print('\nconcatenated dim: ', concatenated_output.shape)
         # Apply the dense layer
         #final_output = F.softmax(self.concat_layer(concatenated_output), dim=1)
         final_output = self.concat_layer(concatenated_output)
