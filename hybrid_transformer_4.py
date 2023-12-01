@@ -157,11 +157,11 @@ for n in range(len(dataset_tot)):
     dataset_tot[n][1] = torch.tensor(np.array(dataset_tot[n][1]), dtype=torch.long)
     dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
 
-batch_size = 2
+batch_size = 30
 train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%
 # Create data loaders for dataset; shuffle for training
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=False, drop_last=True)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=False)
 
 
 # Define the positional encoding function
@@ -363,7 +363,7 @@ n_total_steps = len(train_loader)
 # Training loop
 for epoch in range(num_epochs):
     model.train()
-    for step, (input_bigrams, input_chars, label) in enumerate(train_loader):
+    for step, (input_bigrams, input_chars, actual) in enumerate(train_loader):
 
         # 10, 46, 1405 => bigram input shape
         # 10 64630 => reshape (flatten the last two dim)
@@ -379,7 +379,7 @@ for epoch in range(num_epochs):
         model_out = model(input_bigrams, input_chars)
         ##print('output model: ', model_out.shape)
 
-        loss = criterion(model_out, label)
+        loss = criterion(model_out, actual)
         # backward
         loss.backward()
         optimizer.zero_grad()
@@ -394,7 +394,10 @@ with torch.no_grad():
     model.eval()
     n_true_positive = 0 # true positive
     n_samples = 0
+    class_support = [0 for i in range(51)] # n samples per class
     n_false_negative = 0
+    n_false_positive = 0
+    n_class_false_positive = [0 for i in range(51)]
     n_class_false_negative = [0 for i in range(51)] # false negative for each class
     n_class_true_positive = [0 for i in range(51)] # true positive for each class
     n_class_samples = [0 for i in range(51)] # n. samples for each class
@@ -406,28 +409,40 @@ with torch.no_grad():
 
         # value, index
         _, predicted = torch.max(outputs, 1)  # we don't need the actual value, just the class label (predictions)
-        n_samples += classes.shape[0]  # number of samples in the current batch
         n_true_positive = (predicted == classes).sum().item()  # for each correct prediction we will add 1
-        n_false_negative = (predicted != classes).sum().item()
 
         for i in range(batch_size):
-            label = label_to_index[i]
+            actual = classes[i]
             pred = predicted[i]
-            if label == pred:
-                n_class_true_positive[label] += 1
+            class_support[actual] += 1
+            if actual == pred:
+                n_class_true_positive[actual] += 1
             else:
-                n_class_false_negative[label] += 1
-            n_class_samples[label] += 1
+                n_class_false_negative[actual] += 1
+                n_class_false_positive[pred] += 1
+            n_class_samples[actual] += 1
 
-    precision = n_true_positive / n_samples
-    recall = n_true_positive / (n_true_positive + n_false_negative)
-    f1 = (2 * precision * recall) / (precision + recall)
-
-    print(f'model precision = {precision} %\nmodel recall = {recall}\nmodel F1 = {f1}\n')
-
+    macro_avg_precision = 0
+    macro_avg_recall = 0
     # precision, recall, F1 for each single class
     for i in range(51):
-        class_precision = n_class_true_positive[i] / n_class_samples[i]
+        class_precision = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_positive[i])
         class_recall = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_negative[i])
+        macro_avg_precision += class_precision
+        macro_avg_recall += class_recall
         class_f1 = (2 * class_precision * class_recall) / (class_precision + class_recall)
-        print(f'Class: {label_to_index[i]} -> Precision: {class_precision}  Recall: {class_recall}  F1: {class_f1}')
+        n_false_negative += n_class_false_negative[i]
+        n_false_positive += n_class_false_positive[i]
+        print(f'Class: {label_to_index[i]} Support: {class_support[i]} -> Precision: {class_precision}  Recall: {class_recall}  F1: {class_f1}  False negatives: {n_class_false_negative[i]}')
+
+    micro_precision = n_true_positive / (n_true_positive + n_false_positive)
+    micro_recall = n_true_positive / (n_true_positive + n_false_negative)
+    micro_f1 = (2 * micro_precision * micro_recall) / (micro_precision + micro_recall)
+
+    macro_avg_precision = macro_avg_precision / 51
+    macro_avg_recall = macro_avg_recall / 51
+    macro_avg_f1 = (2 * macro_avg_precision * macro_avg_recall) / (macro_avg_precision + macro_avg_recall)
+
+    # multiclass : tot fp = tot fn -> precision=recall
+    print(f'\nmodel micro avg precision = {micro_precision}\nmodel micro avg recall = {micro_recall}\nmodel micro avg F1 = {micro_f1}'
+          f'\nmodel MACRO avg precision = {macro_avg_precision}\nmodel MACRO avg recall = {macro_avg_recall}\nmodel MACRO avg F1 = {macro_avg_f1}\n')
