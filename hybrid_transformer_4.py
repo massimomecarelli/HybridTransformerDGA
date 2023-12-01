@@ -339,7 +339,6 @@ class DGAHybridModel(nn.Module):
         #final_output = F.softmax(self.concat_layer(concatenated_output), dim=1)
         final_output = self.concat_layer(concatenated_output)
         ##print('\nfinal dim: ', final_output.shape)
-        #final_output = final_output.view(-1, 66414*51)
 
         return final_output
 
@@ -393,10 +392,12 @@ for epoch in range(num_epochs):
 # testing and evaluation
 with torch.no_grad():
     model.eval()
-    n_correct = 0
+    n_true_positive = 0 # true positive
     n_samples = 0
-    n_class_correct = [0 for i in range(51)]
-    n_class_samples = [0 for i in range(51)]
+    n_false_negative = 0
+    n_class_false_negative = [0 for i in range(51)] # false negative for each class
+    n_class_true_positive = [0 for i in range(51)] # true positive for each class
+    n_class_samples = [0 for i in range(51)] # n. samples for each class
     for input_bigrams, input_chars, classes in test_loader:
         input_bigrams = input_bigrams.reshape(-1, 46 * 1405)
         input_chars = input_chars.view(-1, 47 * 38)
@@ -406,19 +407,27 @@ with torch.no_grad():
         # value, index
         _, predicted = torch.max(outputs, 1)  # we don't need the actual value, just the class label (predictions)
         n_samples += classes.shape[0]  # number of samples in the current batch
-        n_correct = (predicted == classes).sum().item()  # for each correct prediction we will add 1
+        n_true_positive = (predicted == classes).sum().item()  # for each correct prediction we will add 1
+        n_false_negative = (predicted != classes).sum().item()
 
         for i in range(batch_size):
             label = label_to_index[i]
             pred = predicted[i]
             if label == pred:
-                n_class_correct[label] += 1
+                n_class_true_positive[label] += 1
+            else:
+                n_class_false_negative[label] += 1
             n_class_samples[label] += 1
 
-    acc = 100.0 * n_correct / n_samples
-    print(f'accuracy = {acc}')
+    precision = n_true_positive / n_samples
+    recall = n_true_positive / (n_true_positive + n_false_negative)
+    f1 = (2 * precision * recall) / (precision + recall)
 
-    # accuracy for each single class
-    for i in range(10):
-        acc = 100.0 * n_class_correct[i] / n_class_samples[i]
-        print(f'Accuracy of {label_to_index[i]}: {acc} %')
+    print(f'model precision = {precision} %\nmodel recall = {recall}\nmodel F1 = {f1}\n')
+
+    # precision, recall, F1 for each single class
+    for i in range(51):
+        class_precision = n_class_true_positive[i] / n_class_samples[i]
+        class_recall = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_negative[i])
+        class_f1 = (2 * class_precision * class_recall) / (class_precision + class_recall)
+        print(f'Class: {label_to_index[i]} -> Precision: {class_precision}  Recall: {class_recall}  F1: {class_f1}')
