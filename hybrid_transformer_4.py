@@ -305,7 +305,7 @@ class RepeatedTransformerEncoder(nn.Module):
                  num_kernels_chars=256):
         super(RepeatedTransformerEncoder, self).__init__()
         self.embedding = nn.Embedding(vocab_size_chars, d_model)
-        self.pos_encoder = positional_encoding(max_seq_len=1786, d_model=128).requires_grad_(False)
+        self.pos_encoder = positional_encoding(max_seq_len=(vocab_size_chars*longest_word), d_model=128).requires_grad_(False)
         self.layers = nn.ModuleList([
             ModifiedEncoderBlock(vocab_size_chars, d_model, hidden_dim, num_heads,
                                  conv_kernel_size=conv_kernel_size, num_kernels=num_kernels_chars,
@@ -325,7 +325,7 @@ class DGAHybridModel(nn.Module):
         super(DGAHybridModel, self).__init__()
         self.model1 = bigram_model
         self.model2 = char_model
-        self.concat_layer = nn.Linear(((46*1405-1)//2)*128+47*38*128, num_classes) # 8500992
+        self.concat_layer = nn.Linear((((longest_bigram_word*vocab_size_bigrams)-1)//2)*128 + longest*vocab_size_chars*128, num_classes) # 8500992
 
     def forward(self, bigram_in, char_in):
         out1 = self.model1(bigram_in)
@@ -368,12 +368,12 @@ for epoch in range(num_epochs):
         # 10, 46, 1405 => bigram input shape
         # 10 64630 => reshape (flatten the last two dim)
         ##print(f'input bigrams: {input_bigrams.shape}')
-        input_bigrams = input_bigrams.view(-1, 46 * 1405)
+        input_bigrams = input_bigrams.view(-1, longest_bigram_word * vocab_size_bigrams) # 46*1405
 
         # 10, 47, 38 => char input shape
         # 10, 1786 => reshape
         ##print(f'input chars: {input_chars.shape}')
-        input_chars = input_chars.view(-1, 47 * 38)
+        input_chars = input_chars.view(-1, longest * vocab_size_chars) # 47*38
 
         # forward
         model_out = model(input_bigrams, input_chars)
@@ -399,8 +399,8 @@ with torch.no_grad():
     n_class_true_positive = [0 for i in range(51)] # true positive for each class
     n_class_samples = [0 for i in range(51)] # n. samples for each class
     for input_bigrams, input_chars, classes in test_loader:
-        input_bigrams = input_bigrams.reshape(-1, 46 * 1405)
-        input_chars = input_chars.view(-1, 47 * 38)
+        input_bigrams = input_bigrams.reshape(-1, longest_bigram_word * vocab_size_bigrams)
+        input_chars = input_chars.view(-1, longest * vocab_size_chars)
         # labels = labels.to(device)
         outputs = model(input_bigrams, input_chars)
 
