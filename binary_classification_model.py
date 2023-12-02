@@ -19,7 +19,6 @@ class CSVDataset(Dataset):
         self.data = pd.read_csv(csv_file, usecols=[0, 131], encoding='unicode_escape', header=0, delimiter=',')
         self.data = self.data.values.tolist()
         self.data = [[sublist[0]] * 2 + sublist[1:] for sublist in self.data]
-
     def __len__(self):
         return len(self.data)
 
@@ -68,12 +67,14 @@ for csv_file in csv_files:
     # find the longest domain name
     for i in range(len(dataset)):
         longest_string = max(dataset[i][0], longest_string, key=len)
+        dataset[i][2] = 0 if class_name == 'legit' else 1
     longest = len(longest_string)
 print('longest string:', longest)
+print(longest_string)
 print('First dataset:\n', datasets[0])
 
 # Get unique labels and create a mapping
-labels = list(set({datasets[d][0][2] for d in range(len(datasets))}))
+labels = [0, 1]
 label_to_index = {label: i for i, label in enumerate(labels)}
 print(f'Labels:\n{labels}')
 print(f'Labels to idx:\n{label_to_index}')
@@ -95,7 +96,7 @@ print(f"Domain Name:\n {datasets[0][2][0]}\nsecond Domain Name:\n {datasets[0][2
 
 # ---------------------- data preparation ---------------------- #
 
-# bigram dtaset
+# bigram dataset
 bigrams_ = []
 # Step 1: Transform domain names in bigrams in each dataset
 for d in range(len(datasets)):
@@ -154,7 +155,7 @@ del datasets
 for n in range(len(dataset_tot)):
     dataset_tot[n][0] = torch.tensor(np.array(dataset_tot[n][0]), dtype=torch.long)
     dataset_tot[n][1] = torch.tensor(np.array(dataset_tot[n][1]), dtype=torch.long)
-    dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
+    dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.float32)
 
 batch_size = 30
 train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%
@@ -223,10 +224,6 @@ class BigramEmbeddingModel(nn.Module):
         #  out cnn: torch.Size([10, 64, 64628])
         ##print('\nout bigram cnn: ', out.shape)
 
-        #out = out.view(-1, self.num_kernels*self.conv_kernel_size)
-        #out = out.view(-1, self.num_kernels*((self.vocab_size * self.longest_word) - self.conv_kernel_size + 1))  # -1, 64*64628
-        #print('in ff:', out.shape)
-
         out = self.feedforward(out)
         return out
 
@@ -243,7 +240,7 @@ class ModifiedEncoderBlock(nn.Module):
         self.attention = nn.MultiheadAttention(embedding_dim, num_heads)
 
         # cnn
-        self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=256,
+        self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=num_kernels,
                                 kernel_size=conv_kernel_size, padding=1, bias=True)
         # kernel_size=3, stride=1, padding=1 => same convolution (the output keeps the same dimension)
         # input cnn = output attention = domain name sequence len
@@ -253,7 +250,7 @@ class ModifiedEncoderBlock(nn.Module):
         # (128 - 3 + 2 * (256 - 128 + 3 - 1) / 2) + 1 = 256
         # Define the feedforward layer
         self.feedforward = nn.Sequential(
-            nn.Linear(256, hidden_dim, bias=True),  # in: 38, out: 128
+            nn.Linear(num_kernels, hidden_dim, bias=True),  # in: 38, out: 128
             nn.ReLU(),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
@@ -324,7 +321,8 @@ class DGAHybridModel(nn.Module):
         super(DGAHybridModel, self).__init__()
         self.model1 = bigram_model
         self.model2 = char_model
-        self.concat_layer = nn.Linear((((longest_bigram_word*vocab_size_bigrams)-1)//2)*128 + longest*vocab_size_chars*128, num_classes) # 8500992
+        self.concat_layer = nn.Linear((((longest_bigram_word*vocab_size_bigrams)-1)//2)*128 + longest*vocab_size_chars*128, num_classes-1) # 8500992, 1
+        # output: probability between 0.0 1.0
 
     def forward(self, bigram_in, char_in):
         out1 = self.model1(bigram_in)
@@ -336,7 +334,7 @@ class DGAHybridModel(nn.Module):
         ##print('\nconcatenated dim: ', concatenated_output.shape)
         # Apply the dense layer
         #final_output = F.softmax(self.concat_layer(concatenated_output), dim=1)
-        final_output = self.concat_layer(concatenated_output)
+        final_output = F.sigmoid(self.concat_layer(concatenated_output)).squeeze(dim=1)
         ##print('\nfinal dim: ', final_output.shape)
 
         return final_output
@@ -345,7 +343,7 @@ class DGAHybridModel(nn.Module):
 # training params
 learning_rate = 0.001
 num_epochs = 2
-num_classes = len(labels)  # 51
+num_classes = len(labels)  # 2
 
 bigram_model = BigramEmbeddingModel(vocab_size=vocab_size_bigrams, embedding_dim=embedding_dim, hidden_dim=hidden_dim,
                                     conv_kernel_size=conv_kernel_size, num_kernels=num_kernels_bigrams,
@@ -356,13 +354,13 @@ char_model = RepeatedTransformerEncoder(vocab_size_chars=vocab_size_chars, d_mod
 model = DGAHybridModel(bigram_model, char_model, num_classes)
 
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-criterion = nn.CrossEntropyLoss()
+criterion = nn.BCELoss() # binary cross entropy loss
 n_total_steps = len(train_loader)
 
 # Training loop
 for epoch in range(num_epochs):
     model.train()
-    for step, (input_bigrams, input_chars, target) in enumerate(train_loader):
+    for step, (input_bigrams, input_chars, actual) in enumerate(train_loader):
 
         # 10, 46, 1405 => bigram input shape
         # 10 64630 => reshape (flatten the last two dim)
@@ -378,7 +376,7 @@ for epoch in range(num_epochs):
         model_out = model(input_bigrams, input_chars)
         ##print('output model: ', model_out.shape)
 
-        loss = criterion(model_out, target)
+        loss = criterion(model_out, actual)
         # backward
         loss.backward()
         optimizer.zero_grad()
