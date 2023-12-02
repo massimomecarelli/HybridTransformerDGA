@@ -297,7 +297,7 @@ class ModifiedEncoderBlock(nn.Module):
         output = self.norm2(output)
         ##print('output dim: ', output.shape)
 
-        return ff_output
+        return output
 
 
 class RepeatedTransformerEncoder(nn.Module):
@@ -363,7 +363,7 @@ n_total_steps = len(train_loader)
 # Training loop
 for epoch in range(num_epochs):
     model.train()
-    for step, (input_bigrams, input_chars, actual) in enumerate(train_loader):
+    for step, (input_bigrams, input_chars, target) in enumerate(train_loader):
 
         # 10, 46, 1405 => bigram input shape
         # 10 64630 => reshape (flatten the last two dim)
@@ -379,7 +379,7 @@ for epoch in range(num_epochs):
         model_out = model(input_bigrams, input_chars)
         ##print('output model: ', model_out.shape)
 
-        loss = criterion(model_out, actual)
+        loss = criterion(model_out, target)
         # backward
         loss.backward()
         optimizer.zero_grad()
