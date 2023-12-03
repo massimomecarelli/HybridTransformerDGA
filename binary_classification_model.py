@@ -277,6 +277,7 @@ class ModifiedEncoderBlock(nn.Module):
         # Permute to (batch_size, embedding_dim, sequence_length)
         input = input.permute(0, 2, 1)
         ##print('out dim: ', input.shape)
+
         # cnn
         # out = self.pool(F.relu(self.conv1d(out))).squeeze(dim=2).permute(0, 2, 1)
         cnn_output = self.pool(F.relu(self.conv1d(input))).permute(0, 2, 1)
@@ -391,13 +392,9 @@ with torch.no_grad():
     model.eval()
     n_true_positive = 0 # true positive
     n_samples = 0
-    class_support = [0 for i in range(51)] # n samples per class
+    class_support = [0 for i in range(2)] # n samples per class DGA (1) non-DGA (0)
     n_false_negative = 0
     n_false_positive = 0
-    n_class_false_positive = [0 for i in range(51)]
-    n_class_false_negative = [0 for i in range(51)] # false negative for each class
-    n_class_true_positive = [0 for i in range(51)] # true positive for each class
-    n_class_samples = [0 for i in range(51)] # n. samples for each class
     for input_bigrams, input_chars, classes in test_loader:
         input_bigrams = input_bigrams.reshape(-1, longest_bigram_word * vocab_size_bigrams)
         input_chars = input_chars.view(-1, longest * vocab_size_chars)
@@ -406,40 +403,22 @@ with torch.no_grad():
 
         # value, index
         _, predicted = torch.max(outputs, 1)  # we don't need the actual value, just the class label (predictions)
-        n_true_positive = (predicted == classes).sum().item()  # for each correct prediction we will add 1
 
         for i in range(batch_size):
             actual = classes[i]
             pred = predicted[i]
             class_support[actual] += 1
-            if actual == pred:
-                n_class_true_positive[actual] += 1
-            else:
-                n_class_false_negative[actual] += 1
-                n_class_false_positive[pred] += 1
-            n_class_samples[actual] += 1
+            if actual == pred == 1:
+                n_true_positive += 1
+            elif actual != pred:
+                if actual == 1: # pred = 0
+                    n_false_negative += 1
+                else: # pred = 1, actual = 0
+                    n_false_positive += 1
 
-    macro_avg_precision = 0
-    macro_avg_recall = 0
-    # precision, recall, F1 for each single class
-    for i in range(51):
-        class_precision = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_positive[i])
-        class_recall = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_negative[i])
-        macro_avg_precision += class_precision
-        macro_avg_recall += class_recall
-        class_f1 = (2 * class_precision * class_recall) / (class_precision + class_recall)
-        n_false_negative += n_class_false_negative[i]
-        n_false_positive += n_class_false_positive[i]
-        print(f'Class: {label_to_index[i]} Support: {class_support[i]} -> Precision: {class_precision}  Recall: {class_recall}  F1: {class_f1}  False negatives: {n_class_false_negative[i]}')
-
-    micro_precision = n_true_positive / (n_true_positive + n_false_positive)
-    micro_recall = n_true_positive / (n_true_positive + n_false_negative)
-    micro_f1 = (2 * micro_precision * micro_recall) / (micro_precision + micro_recall)
-
-    macro_avg_precision = macro_avg_precision / 51
-    macro_avg_recall = macro_avg_recall / 51
-    macro_avg_f1 = (2 * macro_avg_precision * macro_avg_recall) / (macro_avg_precision + macro_avg_recall)
+    precision = n_true_positive / (n_true_positive + n_false_positive)
+    recall = n_true_positive / (n_true_positive + n_false_negative)
+    f1 = (2 * precision * recall) / (precision + recall)
 
     # multiclass : tot fp = tot fn -> precision=recall
-    print(f'\nmodel micro avg precision = {micro_precision}\nmodel micro avg recall = {micro_recall}\nmodel micro avg F1 = {micro_f1}'
-          f'\nmodel MACRO avg precision = {macro_avg_precision}\nmodel MACRO avg recall = {macro_avg_recall}\nmodel MACRO avg F1 = {macro_avg_f1}\n')
+    print(f'\nmodel precision = {precision}\nmodel recall = {recall}\nmodel F1 = {f1}\nDGA: {class_support[1]}\nnon DGA: {class_support[0]}')
