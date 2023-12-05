@@ -197,12 +197,12 @@ class BigramEmbeddingModel(nn.Module):
         print(vocab_size, embedding_dim)
         self.vocab_size = vocab_size
         self.longest_word = longest_word
-        self.num_kernels = num_kernels
+        self.num_kernels = num_kernels # 64
         self.conv_kernel_size = conv_kernel_size # 3
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.pos_encoder = positional_encoding(max_seq_len=(vocab_size*longest_word), d_model=embedding_dim).requires_grad_(False)
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=self.num_kernels, kernel_size=self.conv_kernel_size, bias=True)
-        self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # window vector length = conv kernel length
+        self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # 2
         self.feedforward = nn.Sequential(
             nn.Linear(self.num_kernels, hidden_dim, bias=True),  # in: 64, out: 128
             nn.ReLU(),
@@ -246,14 +246,14 @@ class ModifiedEncoderBlock(nn.Module):
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=256,
                                 kernel_size=conv_kernel_size, padding=1, bias=True)
         # kernel_size=3, stride=1, padding=1 => same convolution (the output keeps the same dimension)
-        # input cnn = output attention = domain name sequence len
+        # dim input cnn = dim output attention = dim domain name sequence len
         self.pool = nn.MaxPool1d(
             kernel_size=1)  # window vector length = conv kernel length
         # Spatial size after conv layer = ((in_size-kernel_size+ 2*padding)/stride)+1
         # (128 - 3 + 2 * (256 - 128 + 3 - 1) / 2) + 1 = 256
         # Define the feedforward layer
         self.feedforward = nn.Sequential(
-            nn.Linear(256, hidden_dim, bias=True),  # in: 38, out: 128
+            nn.Linear(256, hidden_dim, bias=True),  # in: 256, out: 128
             nn.ReLU(),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
@@ -264,7 +264,7 @@ class ModifiedEncoderBlock(nn.Module):
 
     def forward(self, input):
         ##print('input emb input dim ', input.shape)
-        # -> [10 1786 128] -> batch_size, sequence_length, embedding_dim
+        # -> [30 1786 128] -> batch_size, sequence_length, embedding_dim
 
         # Multi-Head Self Attention
         # encoder: query, key, value are the same
@@ -364,13 +364,13 @@ for epoch in range(num_epochs):
     model.train()
     for step, (input_bigrams, input_chars, target) in enumerate(train_loader):
 
-        # 10, 46, 1405 => bigram input shape
-        # 10 64630 => reshape (flatten the last two dim)
+        # 30, 46, 1405 => bigram input shape
+        # 30 64630 => reshape (flatten the last two dim)
         ##print(f'input bigrams: {input_bigrams.shape}')
         input_bigrams = input_bigrams.view(-1, longest_bigram_word * vocab_size_bigrams) # 46*1405
 
-        # 10, 47, 38 => char input shape
-        # 10, 1786 => reshape
+        # 30, 47, 38 => char input shape
+        # 30, 1786 => reshape
         ##print(f'input chars: {input_chars.shape}')
         input_chars = input_chars.view(-1, longest * vocab_size_chars) # 47*38
 
@@ -396,6 +396,7 @@ with torch.no_grad():
     class_support = [0 for i in range(51)] # n samples per class
     n_false_negative = 0
     n_false_positive = 0
+    label_idx = {i: label for i, label in enumerate(labels)}
     n_class_false_positive = [0 for i in range(51)]
     n_class_false_negative = [0 for i in range(51)] # false negative for each class
     n_class_true_positive = [0 for i in range(51)] # true positive for each class
@@ -425,14 +426,22 @@ with torch.no_grad():
     macro_avg_recall = 0
     # precision, recall, F1 for each single class
     for i in range(51):
-        class_precision = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_positive[i])
-        class_recall = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_negative[i])
+        # individual class
+        class_precision = 0.0000
+        class_recall = 0.0000
+        class_f1 = 0.0000
+        if class_support[i]>0 and n_class_true_positive>0:
+            class_precision = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_positive[i])
+            class_recall = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_negative[i])
+            class_f1 = (2 * class_precision * class_recall) / (class_precision + class_recall)
+
+        # add contribution from that class to entire model
         macro_avg_precision += class_precision
         macro_avg_recall += class_recall
-        class_f1 = (2 * class_precision * class_recall) / (class_precision + class_recall)
         n_false_negative += n_class_false_negative[i]
         n_false_positive += n_class_false_positive[i]
-        print(f'Class: {label_to_index[i]} Support: {class_support[i]} -> Precision: {class_precision}  Recall: {class_recall}  F1: {class_f1}  False negatives: {n_class_false_negative[i]}')
+
+        print(f'{i}. Class: {label_idx[i]} - Support: {class_support[i]}  ->  Precision: {class_precision:.4f}  Recall: {class_recall:.4f}  F1: {class_f1:.4f}  False negatives: {n_class_false_negative[i]}')
 
     micro_precision = n_true_positive / (n_true_positive + n_false_positive)
     micro_recall = n_true_positive / (n_true_positive + n_false_negative)
@@ -443,5 +452,5 @@ with torch.no_grad():
     macro_avg_f1 = (2 * macro_avg_precision * macro_avg_recall) / (macro_avg_precision + macro_avg_recall)
 
     # multiclass : tot fp = tot fn -> precision=recall
-    print(f'\nmodel micro avg precision = {micro_precision}\nmodel micro avg recall = {micro_recall}\nmodel micro avg F1 = {micro_f1}'
-          f'\nmodel MACRO avg precision = {macro_avg_precision}\nmodel MACRO avg recall = {macro_avg_recall}\nmodel MACRO avg F1 = {macro_avg_f1}\n')
+    print(f'\nmodel micro avg precision = {micro_precision:.4f}\nmodel micro avg recall = {micro_recall:.4f}\nmodel micro avg F1 = {micro_f1:.4f}'
+          f'\nmodel MACRO avg precision = {macro_avg_precision:.4f}\nmodel MACRO avg recall = {macro_avg_recall:.4f}\nmodel MACRO avg F1 = {macro_avg_f1:.4f}\n')
