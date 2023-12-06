@@ -226,7 +226,7 @@ class BigramEmbeddingModel(nn.Module):
 
         #out = out.view(-1, self.num_kernels*self.conv_kernel_size)
         #out = out.view(-1, self.num_kernels*((self.vocab_size * self.longest_word) - self.conv_kernel_size + 1))  # -1, 64*64628
-        #print('in ff:', out.shape)
+        print('in ff:', out.shape)
 
         out = self.feedforward(out)
         return out
@@ -383,8 +383,8 @@ for epoch in range(num_epochs):
 
         loss = criterion(model_out, target)
         # backward
-        loss.backward()
         optimizer.zero_grad()
+        loss.backward()
         optimizer.step()
 
         if (step + 1) % 10 == 0:

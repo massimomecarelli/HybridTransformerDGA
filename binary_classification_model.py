@@ -379,8 +379,8 @@ for epoch in range(num_epochs):
 
         loss = criterion(model_out, actual)
         # backward
-        loss.backward()
         optimizer.zero_grad()
+        loss.backward()
         optimizer.step()
 
         if (step + 1) % 10 == 0:
