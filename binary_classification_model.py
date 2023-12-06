@@ -161,7 +161,7 @@ batch_size = 30
 train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%
 # Create data loaders for dataset; shuffle for training
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=False)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=False, drop_last=True)
 
 
 # Define the positional encoding function
