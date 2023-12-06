@@ -206,6 +206,7 @@ class BigramEmbeddingModel(nn.Module):
         self.feedforward = nn.Sequential(
             nn.Linear(self.num_kernels, hidden_dim, bias=True),  # in: 64, out: 128
             nn.ReLU(),
+            nn.Dropout(p=0.5),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -241,6 +242,7 @@ class ModifiedEncoderBlock(nn.Module):
         # Define the multi-head self-attention layer
         # embedding_dim=128 , heads=8 => d_k=d_v=16
         self.attention = nn.MultiheadAttention(embedding_dim, num_heads)
+        self.dropout = nn.Dropout(p=0.1)
 
         # cnn
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=256,
@@ -255,6 +257,7 @@ class ModifiedEncoderBlock(nn.Module):
         self.feedforward = nn.Sequential(
             nn.Linear(256, hidden_dim, bias=True),  # in: 256, out: 128
             nn.ReLU(),
+            nn.Dropout(p=0.5),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -272,7 +275,7 @@ class ModifiedEncoderBlock(nn.Module):
         ##print('attention dim: ', attn_output.shape)
 
         # Add and Norm
-        input = input + attn_output
+        input = self.dropout(input + attn_output)
         input = self.norm1(input)
         ##print('after norm dim: ', input.shape)
 
@@ -292,7 +295,7 @@ class ModifiedEncoderBlock(nn.Module):
         ##print('feed forward dim: ', ff_output.shape)
 
         # Add and Norm
-        output = input + ff_output
+        output = self.dropout(input + ff_output)
         output = self.norm2(output)
         ##print('output dim: ', output.shape)
 
