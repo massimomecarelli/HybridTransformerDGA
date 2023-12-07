@@ -144,7 +144,7 @@ dataset_tot = ConcatDataset(datasets)
 # with open("final_dataset_one_hot.txt", "w") as text_file:
 print(
     f"A Dataset Domain:\n Bigram one hot:\n{dataset_tot[2][0]}\n Char encode:\n{dataset_tot[2][1]}\n Bigram encode:\n{dataset_tot[2][0]}\nLabel:\n{dataset_tot[2][2]}")
-print(f'dataset len: {len(dataset_tot)}')  # 50898
+print(f'dataset len: {len(dataset_tot)}')  # 50898 : 1000-dataset
 
 del datasets
 for n in range(len(dataset_tot)):
@@ -153,7 +153,7 @@ for n in range(len(dataset_tot)):
     dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
 
 batch_size = 30
-# train_data, test_data = random_split(dataset_tot, [48710, 12188])  # 80% - 20%, 10000-legit 1000-dataset
+# train_data, test_data = random_split(dataset_tot, [47910, 11988])  # 80% - 20%, 10000-legit 1000-dataset
 train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%, 1000-dataset
 # Create data loaders for dataset; shuffle for training
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
