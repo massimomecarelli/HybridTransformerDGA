@@ -152,7 +152,8 @@ for n in range(len(dataset_tot)):
     dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
 
 batch_size = 30
-train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%
+# train_data, test_data = random_split(dataset_tot, [48710, 12188])  # 80% - 20%, 10000-legit 1000-dataset
+train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%, 1000-dataset
 # Create data loaders for dataset; shuffle for training
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=False, drop_last=True)
