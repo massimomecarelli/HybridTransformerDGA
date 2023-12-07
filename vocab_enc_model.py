@@ -45,7 +45,8 @@ def word_encode(item, index_mapping):
 
 
 # Define the root folder where all the CSV files are located
-root_folder = './DGA'
+root_folder = '/Users/massimomecarelli/Documents/HybridTransformerDGA/DGA'
+#root_folder = '/Users/massimomecarelli/Documents/HybridTransformerDGA/DGA_10000_legit
 
 # Use the os module to navigate through the directories and locate all the CSV files
 csv_files = []
