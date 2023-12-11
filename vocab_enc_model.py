@@ -8,6 +8,10 @@ import torch.nn.functional as F
 import pandas as pd
 import math
 from torch.utils.data import random_split
+from sklearn.model_selection import KFold
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, \
+    ConfusionMatrixDisplay, classification_report
+import matplotlib.pyplot as plt
 
 # device config
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -143,7 +147,7 @@ for d in range(len(datasets)):  # loops the datasets
 dataset_tot = ConcatDataset(datasets)
 # with open("final_dataset_one_hot.txt", "w") as text_file:
 print(
-    f"A Dataset Domain:\n Bigram one hot:\n{dataset_tot[2][0]}\n Char encode:\n{dataset_tot[2][1]}\n Bigram encode:\n{dataset_tot[2][0]}\nLabel:\n{dataset_tot[2][2]}")
+    f"A Dataset Domain:\n Char encode:\n{dataset_tot[2][1]}\n Bigram encode:\n{dataset_tot[2][0]}\n Label:\n{dataset_tot[2][2]}")
 print(f'dataset len: {len(dataset_tot)}')  # 50898 : 1000-dataset
 
 del datasets
@@ -152,13 +156,10 @@ for n in range(len(dataset_tot)):
     dataset_tot[n][1] = torch.tensor(np.array(dataset_tot[n][1]), dtype=torch.long)
     dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
 
-batch_size = 30
 # train_data, test_data = random_split(dataset_tot, [47910, 11988])  # 80% - 20%, 10000-legit 1000-dataset
-train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%, 1000-dataset
-# Create data loaders for dataset; shuffle for training
-train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=False, drop_last=True)
+# train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%, 1000-dataset
 
+# ----- Models -----#
 
 # Define the positional encoding function
 def positional_encoding(max_seq_len, d_model):
@@ -168,7 +169,7 @@ def positional_encoding(max_seq_len, d_model):
     pos_enc = torch.zeros(1, max_seq_len, d_model)
     pos_enc[0, :, 0::2] = torch.sin(position * div_term)  # even
     pos_enc[0, :, 1::2] = torch.cos(position * div_term)  # odd
-    print('pos enc: ', pos_enc.shape)
+    #print('pos enc: ', pos_enc.shape)
     return pos_enc  # (1, seq_len, d_model)
 
 
@@ -342,117 +343,179 @@ class DGAHybridModel(nn.Module):
 
 
 # training params
-learning_rate = 0.0005
-num_epochs = 20
+learning_rate = 0.001
+num_epochs = 6
+k_folds = 5
+batch_size = 30
 num_classes = len(labels)  # 51
 
-bigram_model = BigramEmbeddingModel(vocab_size=vocab_size_bigrams, embedding_dim=embedding_dim, hidden_dim=hidden_dim,
-                                    conv_kernel_size=conv_kernel_size, num_kernels=num_kernels_bigrams,
-                                    word_dim=longest_bigram_word).to(device)
-char_model = RepeatedTransformerEncoder(vocab_size_chars=vocab_size_chars, d_model=embedding_dim, hidden_dim=hidden_dim,
-                                        num_heads=num_heads, num_layers=num_layers, conv_kernel_size=conv_kernel_size,
-                                        num_kernels_chars=num_kernels_chars, seq_len=longest).to(device)
-model = DGAHybridModel(bigram_model, char_model, num_classes).to(device)
+# ----- train, validation, test ----- #
 
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-criterion = nn.CrossEntropyLoss()
-n_total_steps = len(train_loader)
+# Define the K-fold Cross Validator
+kf = KFold(n_splits=k_folds, shuffle=True)
 
-# Training loop
-for epoch in range(num_epochs):
-    model.train()
-    for step, (input_bigrams, input_chars, target) in enumerate(train_loader):
 
-        input_bigrams = input_bigrams.to(device)
-        # 30, 46, => bigram input shape
-        ##print(f'input bigrams: {input_bigrams.shape}')
+# K-fold Cross Validation model evaluation
+accuracy_list = {}
+precision_list = {}
+recall_list = {}
+f1_list = {}
+confusion_matrices = []
+# for classification report
+tot_preds = []
+tot_labels = []
+for fold, (train_ids, val_ids) in enumerate(kf.split(dataset_tot)):
+    print(f"\nFold {fold + 1}/{kf.n_splits}")
+    accuracy_list[f'{fold}'] = []
+    precision_list[f'{fold}'] = []
+    recall_list[f'{fold}'] = []
+    f1_list[f'{fold}'] = []
 
-        input_chars = input_chars.to(device)
-        # 30, 47 => char input shape
-        ##print(f'input chars: {input_chars.shape}')
+    bigram_model = BigramEmbeddingModel(vocab_size=vocab_size_bigrams, embedding_dim=embedding_dim,
+                                        hidden_dim=hidden_dim,
+                                        conv_kernel_size=conv_kernel_size, num_kernels=num_kernels_bigrams,
+                                        word_dim=longest_bigram_word).to(device)
+    char_model = RepeatedTransformerEncoder(vocab_size_chars=vocab_size_chars, d_model=embedding_dim,
+                                            hidden_dim=hidden_dim,
+                                            num_heads=num_heads, num_layers=num_layers,
+                                            conv_kernel_size=conv_kernel_size,
+                                            num_kernels_chars=num_kernels_chars, seq_len=longest).to(device)
+    model = DGAHybridModel(bigram_model, char_model, num_classes).to(device)
 
-        target = target.to(device)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
 
-        # forward
-        model_out = model(input_bigrams, input_chars)
-        ##print('output model: ', model_out.shape)
+    # Create DataLoader for training and validation sets
+    # Sample elements randomly from a given list of ids, no replacement.
+    train_loader = DataLoader(dataset=dataset_tot, batch_size=batch_size,
+                              sampler=torch.utils.data.SubsetRandomSampler(train_ids), num_workers=2)
+    val_loader = DataLoader(dataset=dataset_tot, batch_size=batch_size,
+                            sampler=torch.utils.data.SubsetRandomSampler(val_ids))
+    n_total_steps = len(train_loader)
 
-        loss = criterion(model_out, target)
-        # backward
+    for epoch in range(num_epochs):
+        model.train()
+        for step, (input_bigrams, input_chars, target) in enumerate(train_loader):
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            input_bigrams = input_bigrams.to(device)
+            # 30, 46, => bigram input shape
+            ##print(f'input bigrams: {input_bigrams.shape}')
 
-        if (step + 1) % 100 == 0:
-            print(
-                f'epoch {epoch + 1} / {num_epochs}, step {step + 1}/{n_total_steps}, loss = {loss.item():.4f}')
+            input_chars = input_chars.to(device)
+            # 30, 47 => char input shape
+            ##print(f'input chars: {input_chars.shape}')
 
-# testing and evaluation
-with torch.no_grad():
-    model.eval()
-    n_true_positive = 0  # true positive
-    n_samples = 0
-    class_support = [0 for i in range(51)]  # n samples per class
-    n_false_negative = 0
-    n_false_positive = 0
-    label_idx = {i: label for i, label in enumerate(labels)}
-    n_class_false_positive = [0 for i in range(51)]
-    n_class_false_negative = [0 for i in range(51)]  # false negative for each class
-    n_class_true_positive = [0 for i in range(51)]  # true positive for each class
-    n_class_samples = [0 for i in range(51)]  # n. samples for each class
-    for input_bigrams, input_chars, classes in test_loader:
-        input_bigrams = input_bigrams.to(device)
-        input_chars = input_chars.to(device)
-        classes = classes.to(device)
-        outputs = model(input_bigrams, input_chars)
+            target = target.to(device)
 
-        # value, index
-        _, predicted = torch.max(outputs, 1)  # we don't need the actual value, just the class label (predictions)
-        n_true_positive = (predicted == classes).sum().item()  # for each correct prediction we will add 1
+            optimizer.zero_grad()
 
-        for i in range(batch_size):
-            actual = classes[i]
-            pred = predicted[i]
-            class_support[actual] += 1
-            if actual == pred:
-                n_class_true_positive[actual] += 1
-            else:
-                n_class_false_negative[actual] += 1
-                n_class_false_positive[pred] += 1
-            n_class_samples[actual] += 1
+            # forward
+            model_out = model(input_bigrams, input_chars)
+            ##print('output model: ', model_out.shape)
 
-    macro_avg_precision = 0
-    macro_avg_recall = 0
-    # precision, recall, F1 for each single class
-    for i in range(51):
-        # individual class
-        class_precision = 0.0000
-        class_recall = 0.0000
-        class_f1 = 0.0000
-        if class_support[i] != 0 and n_class_true_positive[i] != 0:
-            class_precision = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_positive[i])
-            class_recall = n_class_true_positive[i] / (n_class_true_positive[i] + n_class_false_negative[i])
-            class_f1 = (2 * class_precision * class_recall) / (class_precision + class_recall)
+            loss = criterion(model_out, target)
 
-        # add contribution from that class to entire model
-        macro_avg_precision += class_precision
-        macro_avg_recall += class_recall
-        n_false_negative += n_class_false_negative[i]
-        n_false_positive += n_class_false_positive[i]
+            # backward
+            loss.backward()
+            optimizer.step()
 
-        print(
-            f'{i}. Class: {label_idx[i]} - Support: {class_support[i]}  ->  Precision: {class_precision:.4f}  Recall: {class_recall:.4f}  F1: {class_f1:.4f}  False negatives: {n_class_false_negative[i]}  True positives: {n_class_true_positive[i]}')
+            if (step + 1) % 300 == 0:
+                print(
+                    f'epoch {epoch + 1} / {num_epochs}, step {step + 1}/{n_total_steps}, loss = {loss.item():.4f}')
 
-    # micro_precision = n_true_positive / (n_true_positive + n_false_positive)
-    # micro_recall = n_true_positive / (n_true_positive + n_false_negative)
-    # micro_f1 = (2 * micro_precision * micro_recall) / (micro_precision + micro_recall)
+        model.eval()
+        all_preds = []
+        all_labels = []
 
-    macro_avg_precision = macro_avg_precision / 51
-    macro_avg_recall = macro_avg_recall / 51
-    macro_avg_f1 = (2 * macro_avg_precision * macro_avg_recall) / (macro_avg_precision + macro_avg_recall)
+        with torch.no_grad():
+            for input_bigrams, input_chars, val_labels in val_loader:
+                input_bigrams = input_bigrams.to(device)
+                input_chars = input_chars.to(device)
+                val_labels = val_labels.to(device)
+                outputs = model(input_bigrams, input_chars)
+                _, preds = torch.max(outputs, 1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(val_labels.cpu().numpy())
 
-    # multiclass : tot fp = tot fn -> precision=recall
-    print(
-        #f'\nmodel micro avg precision = {micro_precision:.4f}\nmodel micro avg recall = {micro_recall:.4f}\nmodel micro avg F1 = {micro_f1:.4f}'
-        f'\nmodel MACRO avg precision = {macro_avg_precision:.4f}\nmodel MACRO avg recall = {macro_avg_recall:.4f}\nmodel MACRO avg F1 = {macro_avg_f1:.4f}\n')
+        # Calculate metrics
+        accuracy = accuracy_score(all_labels, all_preds)
+        precision = precision_score(all_labels, all_preds, average='weighted')
+        recall = recall_score(all_labels, all_preds, average='weighted')
+        f1 = f1_score(all_labels, all_preds, average='weighted')
+
+        # Print metrics
+        print(f"Epoch {epoch + 1}/{num_epochs}:")
+        print(f"Accuracy: {accuracy:.4f}")
+        print(f"Precision: {precision:.4f}")
+        print(f"Recall: {recall:.4f}")
+        print(f"F1 Score: {f1:.4f}")
+        print("=" * 50)
+        # classification report for precision, recall f1-score and accuracy
+        if (epoch + 1) == num_epochs:
+            cm = confusion_matrix(all_labels, all_preds)
+            confusion_matrices.append(cm)
+            tot_preds.extend(all_preds)
+            tot_labels.extend(all_labels)
+
+        # Append metrics to lists
+        accuracy_list[f'{fold}'].append(accuracy)
+        precision_list[f'{fold}'].append(precision)
+        recall_list[f'{fold}'].append(recall)
+        f1_list[f'{fold}'].append(f1)
+
+# Plot metrics across folds
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), accuracy_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('Accuracy Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), precision_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('Precision Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('Precision')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), recall_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('Recall Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('Recall')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), f1_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('F1 Score Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('F1 score')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+average_confusion_matrix = np.mean(confusion_matrices, axis=0)
+# Display confusion matrix using ConfusionMatrixDisplay
+disp = ConfusionMatrixDisplay(confusion_matrix=average_confusion_matrix, display_labels=range(1, num_classes+1))
+fig, ax = plt.subplots(figsize=(29, 29))
+plt.title(f'Average Confusion Matrix')
+# Deactivate default colorbar
+disp.plot(ax=ax, colorbar=False, values_format='', cmap=plt.cm.Blues)
+# Adding custom colorbar
+cax = fig.add_axes([ax.get_position().x1 + 0.01, ax.get_position().y0, 0.02, ax.get_position().height])
+plt.colorbar(disp.im_, cax=cax)
+plt.show()
+
+print(f'Classification report:\n{classification_report(tot_labels, tot_preds, target_names=labels)}')
+
+
