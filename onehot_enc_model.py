@@ -7,10 +7,13 @@ import torch.optim as optim
 import torch.nn.functional as F
 import pandas as pd
 import math
-from torch.utils.data import random_split
+from sklearn.model_selection import KFold
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, \
+    ConfusionMatrixDisplay, classification_report
+import matplotlib.pyplot as plt
 
 # device config
-device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+device = torch.device('cpu' if torch.backends.mps.is_available() else 'cpu')
 
 
 # retrieve datasets
@@ -19,6 +22,7 @@ class CSVDataset(Dataset):
         self.data = pd.read_csv(csv_file, usecols=[0, 131], encoding='unicode_escape', header=0, delimiter=',')
         self.data = self.data.values.tolist()
         self.data = [[sublist[0]] * 2 + sublist[1:] for sublist in self.data]
+
     def __len__(self):
         return len(self.data)
 
@@ -67,14 +71,12 @@ for csv_file in csv_files:
     # find the longest domain name
     for i in range(len(dataset)):
         longest_string = max(dataset[i][0], longest_string, key=len)
-        dataset[i][2] = 0 if class_name == 'legit' else 1
     longest = len(longest_string)
 print('longest string:', longest)
-print(longest_string)
 print('First dataset:\n', datasets[0])
 
 # Get unique labels and create a mapping
-labels = [0, 1]
+labels = list(set({datasets[d][0][2] for d in range(len(datasets))}))
 label_to_index = {label: i for i, label in enumerate(labels)}
 print(f'Labels:\n{labels}')
 print(f'Labels to idx:\n{label_to_index}')
@@ -96,7 +98,7 @@ print(f"Domain Name:\n {datasets[0][2][0]}\nsecond Domain Name:\n {datasets[0][2
 
 # ---------------------- data preparation ---------------------- #
 
-# bigram dataset
+# bigram dtaset
 bigrams_ = []
 # Step 1: Transform domain names in bigrams in each dataset
 for d in range(len(datasets)):
@@ -155,14 +157,10 @@ del datasets
 for n in range(len(dataset_tot)):
     dataset_tot[n][0] = torch.tensor(np.array(dataset_tot[n][0]), dtype=torch.long)
     dataset_tot[n][1] = torch.tensor(np.array(dataset_tot[n][1]), dtype=torch.long)
-    dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.float32)
+    dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
 
-batch_size = 30
-train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%
-# Create data loaders for dataset; shuffle for training
-train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=False, drop_last=True)
 
+# ----- Models -----#
 
 # Define the positional encoding function
 def positional_encoding(max_seq_len, d_model):
@@ -172,7 +170,7 @@ def positional_encoding(max_seq_len, d_model):
     pos_enc = torch.zeros(1, max_seq_len, d_model)
     pos_enc[0, :, 0::2] = torch.sin(position * div_term) # even
     pos_enc[0, :, 1::2] = torch.cos(position * div_term) # odd
-    print('pos enc: ', pos_enc.shape)
+    #print('pos enc: ', pos_enc.shape)
     return pos_enc # (1, seq_len, d_model)
 
 
@@ -195,18 +193,18 @@ num_kernels_chars = 256
 class BigramEmbeddingModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, conv_kernel_size, num_kernels, longest_word):
         super(BigramEmbeddingModel, self).__init__()
-        print(vocab_size, embedding_dim)
         self.vocab_size = vocab_size
         self.longest_word = longest_word
-        self.num_kernels = num_kernels
+        self.num_kernels = num_kernels # 64
         self.conv_kernel_size = conv_kernel_size # 3
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.pos_encoder = positional_encoding(max_seq_len=(vocab_size*longest_word), d_model=embedding_dim).requires_grad_(False)
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=self.num_kernels, kernel_size=self.conv_kernel_size, bias=True)
-        self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # window vector length = conv kernel length
+        self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # 2
         self.feedforward = nn.Sequential(
             nn.Linear(self.num_kernels, hidden_dim, bias=True),  # in: 64, out: 128
             nn.ReLU(),
+            nn.Dropout(p=0.5),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -224,6 +222,10 @@ class BigramEmbeddingModel(nn.Module):
         #  out cnn: torch.Size([10, 64, 64628])
         ##print('\nout bigram cnn: ', out.shape)
 
+        #out = out.view(-1, self.num_kernels*self.conv_kernel_size)
+        #out = out.view(-1, self.num_kernels*((self.vocab_size * self.longest_word) - self.conv_kernel_size + 1))  # -1, 64*64628
+        #print('in ff:', out.shape)
+
         out = self.feedforward(out)
         return out
 
@@ -238,20 +240,22 @@ class ModifiedEncoderBlock(nn.Module):
         # Define the multi-head self-attention layer
         # embedding_dim=128 , heads=8 => d_k=d_v=16
         self.attention = nn.MultiheadAttention(embedding_dim, num_heads)
+        self.dropout = nn.Dropout(p=0.1)
 
         # cnn
-        self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=num_kernels,
+        self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=256,
                                 kernel_size=conv_kernel_size, padding=1, bias=True)
         # kernel_size=3, stride=1, padding=1 => same convolution (the output keeps the same dimension)
-        # input cnn = output attention = domain name sequence len
+        # dim input cnn = dim output attention = dim domain name sequence len
         self.pool = nn.MaxPool1d(
             kernel_size=1)  # window vector length = conv kernel length
         # Spatial size after conv layer = ((in_size-kernel_size+ 2*padding)/stride)+1
         # (128 - 3 + 2 * (256 - 128 + 3 - 1) / 2) + 1 = 256
         # Define the feedforward layer
         self.feedforward = nn.Sequential(
-            nn.Linear(num_kernels, hidden_dim, bias=True),  # in: 38, out: 128
+            nn.Linear(256, hidden_dim, bias=True),  # in: 256, out: 128
             nn.ReLU(),
+            nn.Dropout(p=0.5),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -261,7 +265,7 @@ class ModifiedEncoderBlock(nn.Module):
 
     def forward(self, input):
         ##print('input emb input dim ', input.shape)
-        # -> [10 1786 128] -> batch_size, sequence_length, embedding_dim
+        # -> [30 1786 128] -> batch_size, sequence_length, embedding_dim
 
         # Multi-Head Self Attention
         # encoder: query, key, value are the same
@@ -269,7 +273,7 @@ class ModifiedEncoderBlock(nn.Module):
         ##print('attention dim: ', attn_output.shape)
 
         # Add and Norm
-        input = input + attn_output
+        input = self.dropout(input + attn_output)
         input = self.norm1(input)
         ##print('after norm dim: ', input.shape)
 
@@ -277,7 +281,6 @@ class ModifiedEncoderBlock(nn.Module):
         # Permute to (batch_size, embedding_dim, sequence_length)
         input = input.permute(0, 2, 1)
         ##print('out dim: ', input.shape)
-
         # cnn
         # out = self.pool(F.relu(self.conv1d(out))).squeeze(dim=2).permute(0, 2, 1)
         cnn_output = self.pool(F.relu(self.conv1d(input))).permute(0, 2, 1)
@@ -290,7 +293,7 @@ class ModifiedEncoderBlock(nn.Module):
         ##print('feed forward dim: ', ff_output.shape)
 
         # Add and Norm
-        output = input + ff_output
+        output = self.dropout(input + ff_output)
         output = self.norm2(output)
         ##print('output dim: ', output.shape)
 
@@ -322,8 +325,7 @@ class DGAHybridModel(nn.Module):
         super(DGAHybridModel, self).__init__()
         self.model1 = bigram_model
         self.model2 = char_model
-        self.concat_layer = nn.Linear((((longest_bigram_word*vocab_size_bigrams)-1)//2)*128 + longest*vocab_size_chars*128, num_classes-1) # 8500992, 1
-        # output: probability between 0.0 1.0
+        self.concat_layer = nn.Linear((((longest_bigram_word*vocab_size_bigrams)-1)//2)*128 + longest*vocab_size_chars*128, num_classes) # 8500992
 
     def forward(self, bigram_in, char_in):
         out1 = self.model1(bigram_in)
@@ -335,90 +337,185 @@ class DGAHybridModel(nn.Module):
         ##print('\nconcatenated dim: ', concatenated_output.shape)
         # Apply the dense layer
         #final_output = F.softmax(self.concat_layer(concatenated_output), dim=1)
-        final_output = F.sigmoid(self.concat_layer(concatenated_output)).squeeze(dim=1)
+        final_output = self.concat_layer(concatenated_output)
         ##print('\nfinal dim: ', final_output.shape)
 
         return final_output
 
 
+# ------- Training and Validation -------#
+
+
 # training params
 learning_rate = 0.001
-num_epochs = 2
-num_classes = len(labels)  # 2
+num_epochs = 6
+k_folds = 5
+batch_size = 30
+num_classes = len(labels)  # 51
 
-bigram_model = BigramEmbeddingModel(vocab_size=vocab_size_bigrams, embedding_dim=embedding_dim, hidden_dim=hidden_dim,
-                                    conv_kernel_size=conv_kernel_size, num_kernels=num_kernels_bigrams,
-                                    longest_word=longest_bigram_word)
-char_model = RepeatedTransformerEncoder(vocab_size_chars=vocab_size_chars, d_model=embedding_dim, hidden_dim=hidden_dim,
-                                        num_heads=num_heads, num_layers=num_layers, conv_kernel_size=conv_kernel_size,
-                                        num_kernels_chars=num_kernels_chars, longest_word=longest)
-model = DGAHybridModel(bigram_model, char_model, num_classes)
 
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-criterion = nn.BCELoss() # binary cross entropy loss
-n_total_steps = len(train_loader)
+# Define the K-fold Cross Validator
+kf = KFold(n_splits=k_folds, shuffle=True)
 
-# Training loop
-for epoch in range(num_epochs):
-    model.train()
-    for step, (input_bigrams, input_chars, actual) in enumerate(train_loader):
 
-        # 10, 46, 1405 => bigram input shape
-        # 10 64630 => reshape (flatten the last two dim)
-        ##print(f'input bigrams: {input_bigrams.shape}')
-        input_bigrams = input_bigrams.view(-1, longest_bigram_word * vocab_size_bigrams) # 46*1405
+# K-fold Cross Validation model evaluation
+accuracy_list = {}
+precision_list = {}
+recall_list = {}
+f1_list = {}
+confusion_matrices = []
+# for classification report
+tot_preds = []
+tot_labels = []
+for fold, (train_ids, val_ids) in enumerate(kf.split(dataset_tot)):
+    print(f"\nFold {fold + 1}/{kf.n_splits}")
+    accuracy_list[f'{fold}'] = []
+    precision_list[f'{fold}'] = []
+    recall_list[f'{fold}'] = []
+    f1_list[f'{fold}'] = []
 
-        # 10, 47, 38 => char input shape
-        # 10, 1786 => reshape
-        ##print(f'input chars: {input_chars.shape}')
-        input_chars = input_chars.view(-1, longest * vocab_size_chars) # 47*38
+    bigram_model = BigramEmbeddingModel(vocab_size=vocab_size_bigrams, embedding_dim=embedding_dim,
+                                        hidden_dim=hidden_dim,
+                                        conv_kernel_size=conv_kernel_size, num_kernels=num_kernels_bigrams,
+                                        longest_word=longest_bigram_word).to(device)
+    char_model = RepeatedTransformerEncoder(vocab_size_chars=vocab_size_chars, d_model=embedding_dim,
+                                            hidden_dim=hidden_dim,
+                                            num_heads=num_heads, num_layers=num_layers,
+                                            conv_kernel_size=conv_kernel_size,
+                                            num_kernels_chars=num_kernels_chars, longest_word=longest).to(device)
+    model = DGAHybridModel(bigram_model, char_model, num_classes).to(device)
 
-        # forward
-        model_out = model(input_bigrams, input_chars)
-        ##print('output model: ', model_out.shape)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
 
-        loss = criterion(model_out, actual)
-        # backward
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    # Create DataLoader for training and validation sets
+    # Sample elements randomly from a given list of ids, no replacement.
+    train_loader = DataLoader(dataset=dataset_tot, batch_size=batch_size,
+                              sampler=torch.utils.data.SubsetRandomSampler(train_ids))
+    val_loader = DataLoader(dataset=dataset_tot, batch_size=batch_size,
+                            sampler=torch.utils.data.SubsetRandomSampler(val_ids))
+    n_total_steps = len(train_loader)
 
-        if (step + 1) % 10 == 0:
-            print(
-                f'epoch {epoch + 1} / {num_epochs}, step {step + 1}/{n_total_steps}, loss = {loss.item():.4f}')
+    for epoch in range(num_epochs):
+        model.train()
+        for step, (input_bigrams, input_chars, target) in enumerate(train_loader):
+            # 30, 46, 1405 => bigram input shape
+            # 30 64630 => reshape (flatten the last two dim)
+            ##print(f'input bigrams: {input_bigrams.shape}')
+            input_bigrams = input_bigrams.view(-1, longest_bigram_word * vocab_size_bigrams)  # 46*1405
 
-# testing and evaluation
-with torch.no_grad():
-    model.eval()
-    n_true_positive = 0 # true positive
-    n_samples = 0
-    class_support = [0 for i in range(2)] # n samples per class DGA (1) non-DGA (0)
-    n_false_negative = 0
-    n_false_positive = 0
-    for input_bigrams, input_chars, classes in test_loader:
-        input_bigrams = input_bigrams.reshape(-1, longest_bigram_word * vocab_size_bigrams)
-        input_chars = input_chars.view(-1, longest * vocab_size_chars)
-        # labels = labels.to(device)
-        outputs = model(input_bigrams, input_chars)
+            # 30, 47, 38 => char input shape
+            # 30, 1786 => reshape
+            ##print(f'input chars: {input_chars.shape}')
+            input_chars = input_chars.view(-1, longest * vocab_size_chars)  # 47*38
 
-        # value, index
-        _, predicted = torch.max(outputs, 1)  # we don't need the actual value, just the class label (predictions)
+            # forward
+            model_out = model(input_bigrams, input_chars)
+            ##print('output model: ', model_out.shape)
 
-        for i in range(batch_size):
-            actual = classes[i]
-            pred = predicted[i]
-            class_support[actual] += 1
-            if actual == pred == 1:
-                n_true_positive += 1
-            elif actual != pred:
-                if actual == 1: # pred = 0
-                    n_false_negative += 1
-                else: # pred = 1, actual = 0
-                    n_false_positive += 1
+            loss = criterion(model_out, target)
+            # backward
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-    precision = n_true_positive / (n_true_positive + n_false_positive)
-    recall = n_true_positive / (n_true_positive + n_false_negative)
-    f1 = (2 * precision * recall) / (precision + recall)
+            if (step + 1) % 300 == 0:
+                print(
+                    f'epoch {epoch + 1} / {num_epochs}, step {step + 1}/{n_total_steps}, loss = {loss.item():.4f}')
 
-    # multiclass : tot fp = tot fn -> precision=recall
-    print(f'\nmodel precision = {precision}\nmodel recall = {recall}\nmodel F1 = {f1}\nDGA: {class_support[1]}\nnon DGA: {class_support[0]}')
+        model.eval()
+        all_preds = []
+        all_labels = []
+
+        with torch.no_grad():
+            for input_bigrams, input_chars, val_labels in val_loader:
+                input_bigrams = input_bigrams.to(device)
+                input_chars = input_chars.to(device)
+                val_labels = val_labels.to(device)
+                outputs = model(input_bigrams, input_chars)
+                _, preds = torch.max(outputs, 1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(val_labels.cpu().numpy())
+
+        # Calculate metrics
+        accuracy = accuracy_score(all_labels, all_preds)
+        precision = precision_score(all_labels, all_preds, average='weighted')
+        recall = recall_score(all_labels, all_preds, average='weighted')
+        f1 = f1_score(all_labels, all_preds, average='weighted')
+
+        # Print metrics
+        print(f"Epoch {epoch + 1}/{num_epochs}:")
+        print(f"Accuracy: {accuracy:.4f}")
+        print(f"Precision: {precision:.4f}")
+        print(f"Recall: {recall:.4f}")
+        print(f"F1 Score: {f1:.4f}")
+        print("=" * 50)
+        # classification report for precision, recall f1-score and accuracy
+        if (epoch + 1) == num_epochs:
+            cm = confusion_matrix(all_labels, all_preds)
+            confusion_matrices.append(cm)
+            tot_preds.extend(all_preds)
+            tot_labels.extend(all_labels)
+
+        # Append metrics to lists
+        accuracy_list[f'{fold}'].append(accuracy)
+        precision_list[f'{fold}'].append(precision)
+        recall_list[f'{fold}'].append(recall)
+        f1_list[f'{fold}'].append(f1)
+
+# Plot metrics across folds
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), accuracy_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('Accuracy Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), precision_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('Precision Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('Precision')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), recall_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('Recall Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('Recall')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+for fold in range(k_folds):
+    plt.plot(range(1, num_epochs+1), f1_list[f'{fold}'], label=f'Fold {fold}')
+plt.title('F1 Score Across Folds')
+plt.xlabel('Epochs')
+plt.ylabel('F1 score')
+plt.xlim(1, num_epochs)
+plt.ylim(0.6, 0.9)
+plt.legend(loc="lower right")
+plt.show()
+
+average_confusion_matrix = np.mean(confusion_matrices, axis=0)
+# Display confusion matrix using ConfusionMatrixDisplay
+disp = ConfusionMatrixDisplay(confusion_matrix=average_confusion_matrix, display_labels=range(1, num_classes+1))
+fig, ax = plt.subplots(figsize=(29, 29))
+plt.title(f'Average Confusion Matrix')
+# Deactivate default colorbar
+disp.plot(ax=ax, colorbar=False, values_format='', cmap=plt.cm.Blues)
+# Adding custom colorbar
+cax = fig.add_axes([ax.get_position().x1 + 0.01, ax.get_position().y0, 0.02, ax.get_position().height])
+plt.colorbar(disp.im_, cax=cax)
+plt.show()
+
+print(f'Classification report:\n{classification_report(tot_labels, tot_preds, target_names=labels)}')
+
+

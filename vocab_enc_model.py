@@ -7,7 +7,6 @@ import torch.optim as optim
 import torch.nn.functional as F
 import pandas as pd
 import math
-from torch.utils.data import random_split
 from sklearn.model_selection import KFold
 from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, \
     ConfusionMatrixDisplay, classification_report
@@ -156,8 +155,6 @@ for n in range(len(dataset_tot)):
     dataset_tot[n][1] = torch.tensor(np.array(dataset_tot[n][1]), dtype=torch.long)
     dataset_tot[n][2] = torch.tensor(np.array(dataset_tot[n][2]), dtype=torch.long)
 
-# train_data, test_data = random_split(dataset_tot, [47910, 11988])  # 80% - 20%, 10000-legit 1000-dataset
-# train_data, test_data = random_split(dataset_tot, [40710, 10188])  # 80% - 20%, 1000-dataset
 
 # ----- Models -----#
 
@@ -342,6 +339,9 @@ class DGAHybridModel(nn.Module):
         return final_output
 
 
+# ------- Training and Validation -------#
+
+
 # training params
 learning_rate = 0.001
 num_epochs = 6
@@ -349,7 +349,6 @@ k_folds = 5
 batch_size = 30
 num_classes = len(labels)  # 51
 
-# ----- train, validation, test ----- #
 
 # Define the K-fold Cross Validator
 kf = KFold(n_splits=k_folds, shuffle=True)
