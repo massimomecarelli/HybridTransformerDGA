@@ -432,6 +432,8 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset_tot)):
                 input_bigrams = input_bigrams.to(device)
                 input_chars = input_chars.to(device)
                 val_labels = val_labels.to(device)
+                input_bigrams = input_bigrams.view(-1, longest_bigram_word * vocab_size_bigrams)  # 46*1405
+                input_chars = input_chars.view(-1, longest * vocab_size_chars)  # 47*38
                 outputs = model(input_bigrams, input_chars)
                 _, preds = torch.max(outputs, 1)
                 all_preds.extend(preds.cpu().numpy())
