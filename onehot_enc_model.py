@@ -62,7 +62,6 @@ for dirpath, dirnames, filenames in os.walk(root_folder):
 
 # Instantiate the custom dataset class for each CSV file
 datasets = []
-longest = 0  # longest string dim
 longest_string = []
 for csv_file in csv_files:
     class_name = os.path.basename(os.path.dirname(csv_file))
@@ -71,7 +70,7 @@ for csv_file in csv_files:
     # find the longest domain name
     for i in range(len(dataset)):
         longest_string = max(dataset[i][0], longest_string, key=len)
-    longest = len(longest_string)
+longest = len(longest_string)
 print('longest string:', longest)
 #print('First dataset:\n', datasets[0])
 
@@ -199,12 +198,12 @@ class BigramEmbeddingModel(nn.Module):
         self.conv_kernel_size = conv_kernel_size # 3
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.pos_encoder = positional_encoding(max_seq_len=(vocab_size*longest_word), d_model=embedding_dim).requires_grad_(False)
-        self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=self.num_kernels, kernel_size=self.conv_kernel_size, bias=True)
-        self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # 2
+        self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=self.num_kernels, kernel_size=self.conv_kernel_size, bias=True, padding=1)
+        #self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # 2
         self.feedforward = nn.Sequential(
             nn.Linear(self.num_kernels, hidden_dim, bias=True),  # in: 64, out: 128
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=0.2),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -216,11 +215,11 @@ class BigramEmbeddingModel(nn.Module):
         ##print('in cnn: ', out.shape)
         #  in cnn:  torch.Size([10, 128, 64630])
 
-        out = self.pool(F.relu(self.conv1d(out))).permute(0, 2, 1)
+        out = F.relu(self.conv1d(out)).permute(0, 2, 1)
 
         #out = F.relu(self.conv1d(out)).permute(0, 2, 1)
         #  out cnn: torch.Size([10, 64, 64628])
-        ##print('\nout bigram cnn: ', out.shape)
+        print('\nout bigram cnn: ', out.shape)
 
         #out = out.view(-1, self.num_kernels*self.conv_kernel_size)
         #out = out.view(-1, self.num_kernels*((self.vocab_size * self.longest_word) - self.conv_kernel_size + 1))  # -1, 64*64628
@@ -239,23 +238,21 @@ class ModifiedEncoderBlock(nn.Module):
 
         # Define the multi-head self-attention layer
         # embedding_dim=128 , heads=8 => d_k=d_v=16
-        self.attention = nn.MultiheadAttention(embedding_dim, num_heads)
-        self.dropout = nn.Dropout(p=0.1)
+        self.attention = nn.MultiheadAttention(embedding_dim, num_heads, dropout=0.2)
+        self.dropout = nn.Dropout(p=0.2)
 
         # cnn
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=256,
-                                kernel_size=conv_kernel_size, padding=1, bias=True)
+                                kernel_size=conv_kernel_size, padding='same', bias=True)
         # kernel_size=3, stride=1, padding=1 => same convolution (the output keeps the same dimension)
         # dim input cnn = dim output attention = dim domain name sequence len
-        self.pool = nn.MaxPool1d(
-            kernel_size=1)  # window vector length = conv kernel length
-        # Spatial size after conv layer = ((in_size-kernel_size+ 2*padding)/stride)+1
-        # (128 - 3 + 2 * (256 - 128 + 3 - 1) / 2) + 1 = 256
+        #self.pool = nn.MaxPool1d(kernel_size=1)
+
         # Define the feedforward layer
         self.feedforward = nn.Sequential(
             nn.Linear(256, hidden_dim, bias=True),  # in: 256, out: 128
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=0.2),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -283,13 +280,13 @@ class ModifiedEncoderBlock(nn.Module):
         ##print('out dim: ', input.shape)
         # cnn
         # out = self.pool(F.relu(self.conv1d(out))).squeeze(dim=2).permute(0, 2, 1)
-        cnn_output = self.pool(F.relu(self.conv1d(input))).permute(0, 2, 1)
-        #cnn_output = F.relu(self.conv1d(input)).permute(0, 2, 1)
+        #cnn_output = self.pool(F.relu(self.conv1d(input))).permute(0, 2, 1)
+        cnn_output = F.relu(self.conv1d(input)).permute(0, 2, 1)
         input = input.permute(0, 2, 1)
         ##print('after cnn dim: ', cnn_output.shape)
 
         # Feedforward
-        ff_output = F.relu(self.feedforward(cnn_output))
+        ff_output = self.feedforward(cnn_output)
         ##print('feed forward dim: ', ff_output.shape)
 
         # Add and Norm
@@ -325,7 +322,7 @@ class DGAHybridModel(nn.Module):
         super(DGAHybridModel, self).__init__()
         self.model1 = bigram_model
         self.model2 = char_model
-        self.concat_layer = nn.Linear((((longest_bigram_word*vocab_size_bigrams)-1)//2)*128 + longest*vocab_size_chars*128, num_classes) # 8500992
+        self.concat_layer = nn.Linear((longest_bigram_word*vocab_size_bigrams)*128 + longest*vocab_size_chars*128, num_classes) # 8500992
 
     def forward(self, bigram_in, char_in):
         out1 = self.model1(bigram_in)

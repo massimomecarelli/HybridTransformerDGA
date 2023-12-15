@@ -60,7 +60,6 @@ for dirpath, dirnames, filenames in os.walk(root_folder):
 
 # Instantiate the custom dataset class for each CSV file
 datasets = []
-longest = 0  # longest string dim
 longest_string = []
 for csv_file in csv_files:
     class_name = os.path.basename(os.path.dirname(csv_file))
@@ -69,7 +68,7 @@ for csv_file in csv_files:
     # find the longest domain name
     for i in range(len(dataset)):
         longest_string = max(dataset[i][0], longest_string, key=len)
-    longest = len(longest_string)
+longest = len(longest_string)
 print('longest string:', longest)
 print('First dataset:\n', datasets[0])
 
@@ -196,12 +195,12 @@ class BigramEmbeddingModel(nn.Module):
         self.pos_encoder = positional_encoding(max_seq_len=self.word_dim, d_model=embedding_dim).requires_grad_(
             False).to(device)
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=self.num_kernels,
-                                kernel_size=self.conv_kernel_size, bias=True, padding='same')
+                                kernel_size=self.conv_kernel_size, bias=True, padding=1)
         # self.pool = nn.MaxPool1d(kernel_size=self.conv_kernel_size-1)  # 2
         self.feedforward = nn.Sequential(
             nn.Linear(self.num_kernels, hidden_dim, bias=True),  # in: 64, out: 128
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=0.2),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -233,22 +232,18 @@ class ModifiedEncoderBlock(nn.Module):
 
         # Define the multi-head self-attention layer
         # embedding_dim=128 , heads=8 => d_k=d_v=16
-        self.attention = nn.MultiheadAttention(embedding_dim, num_heads)
+        self.attention = nn.MultiheadAttention(embedding_dim, num_heads, dropout=0.2)
         self.dropout = nn.Dropout(p=0.1)
 
         # cnn
         self.conv1d = nn.Conv1d(in_channels=embedding_dim, out_channels=256,
                                 kernel_size=conv_kernel_size, padding='same', bias=True)
-        # kernel_size=3, stride=1, padding=1 => same convolution (the output keeps the same dimension)
-        # dim input cnn = dim output attention = dim domain name sequence len
-        # self.pool = nn.MaxPool1d(kernel_size=1)  # window vector length = conv kernel length
-        # Spatial size after conv layer = ((in_size-kernel_size+ 2*padding)/stride)+1
-        # (128 - 3 + 2 * (256 - 128 + 3 - 1) / 2) + 1 = 256
+
         # Define the feedforward layer
         self.feedforward = nn.Sequential(
             nn.Linear(256, hidden_dim, bias=True),  # in: 256, out: 128
             nn.ReLU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=0.2),
             nn.Linear(hidden_dim, embedding_dim, bias=True),  # in: 128, out: 128
         )
 
@@ -281,7 +276,7 @@ class ModifiedEncoderBlock(nn.Module):
         # print('after char cnn dim: ', cnn_output.shape)
 
         # Feedforward
-        ff_output = F.relu(self.feedforward(cnn_output))
+        ff_output = self.feedforward(cnn_output)
         # feed forward char dim:  torch.Size([30, 47, 128])
         # print('feed forward char dim: ', ff_output.shape)
 
@@ -329,7 +324,7 @@ class DGAHybridModel(nn.Module):
         concatenated_output = torch.cat((out1, out2), dim=1)
         # print('\nconcatenated dim: ', concatenated_output.shape)
         # concatenated dim:  torch.Size([30, 11904])
-        concatenated_output = concatenated_output.view(-1, 93 * 128)
+        concatenated_output = concatenated_output.view(-1, (longest+longest_bigram_word) * 128)
 
         # Apply the dense layer
         # print(concatenated_output.shape)
