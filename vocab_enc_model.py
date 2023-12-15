@@ -389,6 +389,8 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset_tot)):
 
     for epoch in range(num_epochs):
         model.train()
+        train_preds = []
+        train_labels = []
         for step, (input_bigrams, input_chars, target) in enumerate(train_loader):
 
             input_bigrams = input_bigrams.to(device)
@@ -406,6 +408,9 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset_tot)):
             # forward
             model_out = model(input_bigrams, input_chars)
             ##print('output model: ', model_out.shape)
+            _, preds = torch.max(model_out, 1)
+            train_preds.extend(preds.cpu().numpy())
+            train_labels.extend(target.cpu().numpy())
 
             loss = criterion(model_out, target)
 
@@ -416,6 +421,19 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset_tot)):
             if (step + 1) % 300 == 0:
                 print(
                     f'epoch {epoch + 1} / {num_epochs}, step {step + 1}/{n_total_steps}, loss = {loss.item():.4f}')
+
+        # Calculate metrics
+        train_accuracy = accuracy_score(train_labels, train_preds)
+        train_precision = precision_score(train_labels, train_preds, average='weighted')
+        train_recall = recall_score(train_labels, train_preds, average='weighted')
+        train_f1 = f1_score(train_labels, train_preds, average='weighted')
+
+        # Print metrics
+        print(f"Epoch {epoch + 1}/{num_epochs}:")
+        print(f"Train Accuracy: {train_accuracy:.4f}")
+        print(f"Train Precision: {train_precision:.4f}")
+        print(f"Train Recall: {train_recall:.4f}")
+        print(f"Train F1 Score: {train_f1:.4f}")
 
         model.eval()
         all_preds = []
