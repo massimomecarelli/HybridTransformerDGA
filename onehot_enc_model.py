@@ -77,7 +77,7 @@ print('longest string:', longest)
 # Get unique labels and create a mapping
 labels = list(set({datasets[d][0][2] for d in range(len(datasets))}))
 label_to_index = {label: i for i, label in enumerate(labels)}
-print(f'Labels:\n{labels}')
+#print(f'Labels:\n{labels}')
 print(f'Labels to idx:\n{label_to_index}')
 
 # insert a zeros padding as the header of the domain shorter than the longest

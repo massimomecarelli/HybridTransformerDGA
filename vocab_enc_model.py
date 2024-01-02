@@ -70,12 +70,12 @@ for csv_file in csv_files:
         longest_string = max(dataset[i][0], longest_string, key=len)
 longest = len(longest_string)
 print('longest string:', longest)
-print('First dataset:\n', datasets[0])
+#print('First dataset:\n', datasets[0])
 
 # Get unique labels and create a mapping
 labels = list(set({datasets[d][0][2] for d in range(len(datasets))}))
 label_to_index = {label: i for i, label in enumerate(labels)}
-print(f'Labels:\n{labels}')
+#print(f'Labels:\n{labels}')
 print(f'Labels to idx:\n{label_to_index}')
 
 # insert a zeros padding as the header of the domain shorter than the longest
@@ -122,12 +122,12 @@ print(
 bigrams_vocabulary = create_vocab(bigrams_)
 chars_vocabulary = create_vocab(chars_)
 
-print('Characters Vocabulary:')
-print(chars_vocabulary)
+#print('Characters Vocabulary:')
+#print(chars_vocabulary)
 print(f'Char Vocabulary len: {len(chars_vocabulary)}')
-print('Bigrams Vocabulary:')
-print(bigrams_vocabulary)
-print(f'Vocabulary len: {len(bigrams_vocabulary)}')
+#print('Bigrams Vocabulary:')
+#print(bigrams_vocabulary)
+print(f'Bigram Vocabulary len: {len(bigrams_vocabulary)}')
 
 # Step 3: Assign an index to each bigram/character
 index_mapping_bigrams = create_index_mapping(bigrams_vocabulary)
