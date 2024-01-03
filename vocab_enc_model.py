@@ -65,8 +65,10 @@ for csv_file in csv_files:
     class_name = os.path.basename(os.path.dirname(csv_file))
     dataset = CSVDataset(csv_file, class_name)
     datasets.append(dataset.data)
-    # find the longest domain name
+    # ignore "." and find the longest domain name
     for i in range(len(dataset)):
+        dataset[i][0] = dataset[i][0].replace(".", "")
+        dataset[i][1] = dataset[i][1].replace(".", "")
         longest_string = max(dataset[i][0], longest_string, key=len)
 longest = len(longest_string)
 print('longest string:', longest)
