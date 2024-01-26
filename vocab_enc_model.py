@@ -518,7 +518,7 @@ plt.ylim(0.6, 0.9)
 plt.legend(loc="lower right")
 plt.show()
 
-average_confusion_matrix = np.mean(confusion_matrices, axis=0)
+average_confusion_matrix = np.sum(confusion_matrices, axis=0)
 # Display confusion matrix using ConfusionMatrixDisplay
 disp = ConfusionMatrixDisplay(confusion_matrix=average_confusion_matrix, display_labels=range(1, num_classes+1))
 fig, ax = plt.subplots(figsize=(29, 29))
